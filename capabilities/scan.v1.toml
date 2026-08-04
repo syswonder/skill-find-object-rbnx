@@ -1,0 +1,12 @@
+[contract]
+id          = "robonix/skill/find_object/scan"
+version     = "1"
+kind        = "skill"
+idl         = "find_object/srv/ScanForObject.srv"
+description = "Rotate in place through a full circle and return an annotated camera mosaic for Pilot to inspect."
+
+[mode]
+type = "rpc"
+
+[semantics]
+user_invocable = true

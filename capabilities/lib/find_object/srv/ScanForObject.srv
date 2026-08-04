@@ -1,0 +1,9 @@
+# The target is used as context and drawn into the resulting contact sheet.
+# Pilot performs the visual recognition after this tool returns.
+string target
+---
+# Keep these fields at response top level. Pilot recognizes this shape and
+# attaches image_base64 to the next VLM reasoning round as a vision input.
+string image_base64
+string format
+string detail

@@ -1,0 +1,5 @@
+rbnx-build/
+.venv/
+logs/
+__pycache__/
+*.pyc
