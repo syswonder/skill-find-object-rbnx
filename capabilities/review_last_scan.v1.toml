@@ -1,0 +1,9 @@
+[contract]
+id          = "robonix/skill/find_object/review_last_scan"
+version     = "1"
+kind        = "skill"
+idl         = "find_object/srv/ReviewLastScan.srv"
+description = "Return the latest 360-degree camera mosaic for a visual follow-up question without moving the robot."
+
+[mode]
+type = "rpc"

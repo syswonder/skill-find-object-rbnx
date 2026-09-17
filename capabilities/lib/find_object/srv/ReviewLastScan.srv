@@ -1,0 +1,8 @@
+# The question gives Pilot visual-reasoning context after this image is attached.
+string question
+---
+# Keep these fields at response top level so Pilot attaches the image to its
+# next VLM reasoning round, matching the scan response shape.
+string image_base64
+string format
+string detail

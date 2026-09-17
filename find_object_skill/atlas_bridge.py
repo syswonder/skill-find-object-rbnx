@@ -7,7 +7,12 @@ import time
 
 from robonix_api import ATLAS, Err, Ok, Skill
 
-from find_object_mcp import ScanForObject_Request, ScanForObject_Response
+from find_object_mcp import (
+    ReviewLastScan_Request,
+    ReviewLastScan_Response,
+    ScanForObject_Request,
+    ScanForObject_Response,
+)
 
 from .controller import SweepController, SweepError
 
@@ -72,6 +77,22 @@ async def scan(req: ScanForObject_Request) -> ScanForObject_Response:
     )
 
 
+@skill.mcp("robonix/skill/find_object/review_last_scan")
+async def review_last_scan(req: ReviewLastScan_Request) -> ReviewLastScan_Response:
+    """Reattach the latest scan for a VLM follow-up without moving the robot."""
+    if controller is None:
+        raise RuntimeError("find-object controller is not active")
+    try:
+        image_base64, detail = controller.review_latest(req.question.strip())
+    except SweepError as exc:
+        raise RuntimeError(f"latest scan is unavailable: {exc}") from exc
+    return ReviewLastScan_Response(
+        image_base64=image_base64,
+        format="jpeg",
+        detail=detail,
+    )
+
+
 @skill.on_init
 def init(cfg: dict):
     """Store lightweight configuration; defer dependency connections until activation."""
@@ -80,6 +101,14 @@ def init(cfg: dict):
     step_deg = float(config.get("step_deg", 45.0))
     if not abs(step_deg * 8.0 - 360.0) < 1e-6:
         return Err("step_deg must be 45 for the fixed eight-frame sweep")
+    if float(config.get("scan_memory_ttl_s", 900.0)) <= 0:
+        return Err("scan_memory_ttl_s must be greater than zero")
+    if not isinstance(config.get("save_images", False), bool):
+        return Err("save_images must be a boolean")
+    if config.get("save_images", False) and not str(
+        config.get("image_output_dir", "")
+    ).strip():
+        return Err("image_output_dir is required when save_images is true")
     return Ok()
 
 
@@ -96,6 +125,9 @@ def activate():
             chassis_endpoint=inputs["chassis"],
             step_deg=float(config.get("step_deg", 45.0)),
             settle_s=float(config.get("settle_s", 0.6)),
+            scan_memory_ttl_s=float(config.get("scan_memory_ttl_s", 900.0)),
+            save_images=config.get("save_images", False),
+            image_output_dir=str(config.get("image_output_dir", "")),
         )
     except Exception as exc:  # noqa: BLE001
         return Err(str(exc))

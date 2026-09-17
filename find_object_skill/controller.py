@@ -7,6 +7,10 @@ from io import BytesIO
 import json
 import logging
 import math
+import os
+from pathlib import Path
+import re
+import tempfile
 import threading
 import time
 from typing import Any, Callable
@@ -43,6 +47,10 @@ class RotationError(SweepError):
         self.actual_deg = actual_deg
 
 
+class NoRecentScanError(SweepError):
+    """Report that no sufficiently recent sweep is available for review."""
+
+
 class SweepController:
     """Capture eight headings and command closed-loop chassis rotations."""
 
@@ -53,6 +61,9 @@ class SweepController:
         chassis_endpoint: str,
         step_deg: float = 45.0,
         settle_s: float = 0.6,
+        scan_memory_ttl_s: float = 900.0,
+        save_images: bool = False,
+        image_output_dir: str = "",
         capture: Callable[[], bytes] | None = None,
         rotate: Callable[[float], float] | None = None,
     ) -> None:
@@ -63,9 +74,23 @@ class SweepController:
         self.chassis_endpoint = _grpc_target(chassis_endpoint)
         self.step_deg = step_deg
         self.settle_s = max(0.0, settle_s)
+        if scan_memory_ttl_s <= 0:
+            raise ValueError("scan_memory_ttl_s must be greater than zero")
+        self.scan_memory_ttl_s = scan_memory_ttl_s
+        self.save_images = save_images
+        self.image_output_dir: Path | None = None
+        if save_images:
+            if not image_output_dir.strip():
+                raise ValueError("image_output_dir is required when save_images is true")
+            output_dir = Path(image_output_dir).expanduser()
+            output_dir.mkdir(parents=True, exist_ok=True)
+            if not output_dir.is_dir():
+                raise ValueError(f"image_output_dir is not a directory: {output_dir}")
+            self.image_output_dir = output_dir.resolve()
         self._capture_override = capture
         self._rotate_override = rotate
         self._run_lock = threading.Lock()
+        self._latest_scan: tuple[bytes, str, float] | None = None
 
     def scan(self, target: str) -> tuple[str, str]:
         """Capture before each rotation, finish at the initial heading, and build JPEG output.
@@ -102,16 +127,43 @@ class SweepController:
             mosaic = make_contact_sheet(frames, target, self.step_deg)
             output = BytesIO()
             mosaic.save(output, format="JPEG", quality=88, optimize=True)
+            jpeg = output.getvalue()
+            captured_at = time.time()
             detail = (
                 f"captured 8 headings for target {target!r}; "
                 f"measured cumulative rotation={accumulated_deg:.1f} deg"
             )
-            return base64.b64encode(output.getvalue()).decode("ascii"), detail
+            if self.image_output_dir is not None:
+                saved_path = _save_contact_sheet(jpeg, self.image_output_dir, target)
+                detail += f"; saved contact sheet to {saved_path}"
+            self._latest_scan = (jpeg, target, captured_at)
+            return base64.b64encode(jpeg).decode("ascii"), detail
         except Exception as exc:
             self._restore_heading(accumulated_deg)
             raise SweepError(str(exc)) from exc
         finally:
             self._run_lock.release()
+
+    def review_latest(self, question: str) -> tuple[str, str]:
+        """Return the latest contact sheet so Pilot can answer a follow-up question.
+
+        The image is process-local short-term visual memory. It expires to prevent a
+        stale observation from being presented as the robot's current surroundings.
+        """
+        latest = self._latest_scan
+        if latest is None:
+            raise NoRecentScanError("no completed scan is available; run scan first")
+        jpeg, target, captured_at = latest
+        age_s = max(0.0, time.time() - captured_at)
+        if age_s > self.scan_memory_ttl_s:
+            raise NoRecentScanError(
+                f"latest scan is {age_s:.0f}s old and has expired; run scan again"
+            )
+        detail = (
+            f"reviewing latest scan captured {age_s:.0f}s ago for target {target!r}; "
+            f"question={question!r}; answer only from visible evidence in this image"
+        )
+        return base64.b64encode(jpeg).decode("ascii"), detail
 
     def _capture_image(self) -> Image.Image:
         """Fetch one JPEG snapshot through the atlas-resolved camera MCP endpoint."""
@@ -181,6 +233,30 @@ def _grpc_target(endpoint: str) -> str:
     return endpoint.removeprefix("http://").removeprefix("https://").replace(
         "localhost", "127.0.0.1"
     )
+
+
+def _save_contact_sheet(jpeg: bytes, output_dir: Path, target: str) -> Path:
+    """Atomically save one contact sheet under a timestamped safe filename."""
+    safe_target = re.sub(r"[^A-Za-z0-9._-]+", "-", target.strip()).strip("-._")
+    safe_target = re.sub(r"\.{2,}", "-", safe_target)
+    safe_target = safe_target[:64] or "scan"
+    timestamp = time.strftime("%Y%m%dT%H%M%S", time.localtime())
+    fd, temporary_name = tempfile.mkstemp(prefix=".scan-", suffix=".tmp", dir=output_dir)
+    nanoseconds = time.time_ns() % 1_000_000_000
+    destination = output_dir / f"{timestamp}-{nanoseconds:09d}_{safe_target}.jpg"
+    try:
+        with os.fdopen(fd, "wb") as output:
+            output.write(jpeg)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary_name, destination)
+    except Exception:
+        try:
+            os.unlink(temporary_name)
+        except FileNotFoundError:
+            pass
+        raise
+    return destination
 
 
 def make_contact_sheet(

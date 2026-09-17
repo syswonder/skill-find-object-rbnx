@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import base64
 from io import BytesIO
+from pathlib import Path
+import tempfile
+import time
 import unittest
+import unittest.mock
 
 from PIL import Image
 
 from find_object_skill.controller import (
     _signed_relative_angle,
+    NoRecentScanError,
     RotationError,
     SweepController,
     SweepError,
@@ -120,6 +125,70 @@ class SweepControllerTest(unittest.TestCase):
 
         self.assertEqual(commands, [45.0] + [47.0] * 7)
         self.assertIn("358.0 deg", detail)
+
+    def test_scan_optionally_saves_the_final_contact_sheet(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            controller = SweepController(
+                camera_endpoint="unused",
+                chassis_endpoint="unused",
+                settle_s=0.0,
+                save_images=True,
+                image_output_dir=temporary_dir,
+                capture=lambda: jpeg((20, 40, 60)),
+                rotate=lambda degrees: degrees,
+            )
+
+            encoded, detail = controller.scan("water bottle/../unsafe")
+
+            saved = list(Path(temporary_dir).glob("*.jpg"))
+            self.assertEqual(len(saved), 1)
+            self.assertNotIn("..", saved[0].name)
+            self.assertEqual(saved[0].read_bytes(), base64.b64decode(encoded))
+            self.assertIn(f"saved contact sheet to {saved[0]}", detail)
+
+    def test_save_requires_an_output_directory(self) -> None:
+        with self.assertRaisesRegex(ValueError, "image_output_dir is required"):
+            SweepController(
+                camera_endpoint="unused",
+                chassis_endpoint="unused",
+                save_images=True,
+            )
+
+    def test_review_latest_returns_scan_without_more_motion(self) -> None:
+        commands: list[float] = []
+        controller = SweepController(
+            camera_endpoint="unused",
+            chassis_endpoint="unused",
+            settle_s=0.0,
+            capture=lambda: jpeg((20, 40, 60)),
+            rotate=lambda degrees: commands.append(degrees) or degrees,
+        )
+        scanned, _ = controller.scan("yellow gate")
+
+        reviewed, detail = controller.review_latest("is it open?")
+
+        self.assertEqual(reviewed, scanned)
+        self.assertEqual(len(commands), 8)
+        self.assertIn("yellow gate", detail)
+        self.assertIn("is it open?", detail)
+
+    def test_review_requires_a_recent_completed_scan(self) -> None:
+        controller = SweepController(
+            camera_endpoint="unused",
+            chassis_endpoint="unused",
+            scan_memory_ttl_s=0.001,
+            capture=lambda: jpeg((20, 40, 60)),
+            rotate=lambda degrees: degrees,
+        )
+        with self.assertRaisesRegex(NoRecentScanError, "run scan first"):
+            controller.review_latest("is the gate open?")
+
+        controller.scan("gate")
+        with unittest.mock.patch(
+            "find_object_skill.controller.time.time", return_value=time.time() + 1.0
+        ):
+            with self.assertRaisesRegex(NoRecentScanError, "expired"):
+                controller.review_latest("is it open?")
 
 
 if __name__ == "__main__":

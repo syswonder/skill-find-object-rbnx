@@ -1,12 +1,25 @@
 ---
-description: Required active-perception skill when a user asks Lite3 to look around, search for, visually confirm, or count objects now; perform a live annotated eight-view 360-degree camera sweep instead of relying on Scene's historical semantic object records.
+description: Active-perception skill for inspecting Lite3's surroundings, finding or counting objects, and answering follow-up questions from the latest annotated eight-view 360-degree camera sweep.
 ---
 
-# Find object
+# Inspect surroundings
 
 Use `robonix/skill/find_object/scan` when the user asks Lite3 to look around,
 search for, visually confirm, or count a named object such as a water bottle.
 Pass the requested object name in `target`.
+
+After a successful scan, use `robonix/skill/find_object/review_last_scan` for
+follow-up questions about the same observation, such as “黄色的大门有没有打开”.
+Pass the complete question in `question`. This call does not move the robot or
+capture new images; it returns the latest contact sheet to Pilot for another
+VLM reasoning round. Answer only from visible evidence. Say when the relevant
+area is occluded, outside the camera view, or too ambiguous to determine.
+
+The latest completed scan is retained in process memory for
+`scan_memory_ttl_s` (15 minutes by default). If it is missing or expired, run a
+new scan after applying the motion-safety checks below. Do not describe an old
+scan as the current state, and do not silently rescan when the user asked about
+the earlier observation.
 
 Treat words such as "look around", "find", "search", "check whether there is",
 "how many are there now", and their Chinese equivalents（环顾四周、寻找、找一下、
@@ -32,6 +45,11 @@ human robot-relative terms, for example “机器人右侧约 90°，大致位�
 directions as relative to the robot's front at sweep start; because the final
 rotation restores that heading, they are also relative to the robot's front
 after a successful sweep.
+
+The deployment may set `save_images: true` and `image_output_dir` to persist
+each final annotated JPEG contact sheet. Saving is disabled by default. A
+successful response includes the saved path in `detail`; container deployments
+must mount the configured directory from the host if scans must persist.
 
 Direction mapping:
 

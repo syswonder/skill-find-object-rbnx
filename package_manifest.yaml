@@ -3,8 +3,8 @@ manifestVersion: 1
 package:
   name: robonix.skill.find_object
   version: 0.1.0
-  description: Capture an annotated 360-degree camera sweep for Pilot object recognition.
-  tags: [skill, camera, object-search, lite3]
+  description: Inspect the surroundings with a 360-degree camera sweep and review the latest observation.
+  tags: [skill, camera, environment-inspection, object-search, lite3]
   maintainers: [Bunnycxk <2501213313@stu.pku.edu.cn>]
   license: Apache-2.0
 
@@ -16,3 +16,5 @@ capabilities:
     path: capabilities/driver.v1.toml
   - name: robonix/skill/find_object/scan
     path: capabilities/scan.v1.toml
+  - name: robonix/skill/find_object/review_last_scan
+    path: capabilities/review_last_scan.v1.toml
